@@ -1,0 +1,30 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.*
+
+!.env.example
+
+# Local data
+data/raw/*
+data/processed/*
+
+# Excel outputs
+*.xlsx
+*.xls
+
+# Local VS Code settings
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db

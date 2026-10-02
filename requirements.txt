@@ -1,0 +1,12 @@
+pandas
+numpy
+openpyxl
+python-dotenv
+streamlit
+jupyter
+ipykernel
+matplotlib
+seaborn
+scikit-learn
+openai
+huggingface_hub
