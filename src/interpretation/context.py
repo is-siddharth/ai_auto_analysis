@@ -1,5 +1,7 @@
 import pandas as pd
 
+from src.profiling.quality_guide import build_quality_guides
+
 
 def _safe_list(value):
     """Return a list without failing on None or malformed input."""
@@ -251,6 +253,13 @@ def build_dataset_context(
 
         if isinstance(summary, dict):
             context["quality_summary"] = summary
+
+        # Keep the quality context issue-specific. This gives the LLM concrete
+        # dataset evidence instead of generic data-cleaning examples.
+        try:
+            context["quality_lessons"] = build_quality_guides(quality, df)
+        except Exception:
+            context["quality_lessons"] = []
 
     # ---------------------------------------------------------------
     # Relationships

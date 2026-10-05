@@ -33,7 +33,15 @@ Follow these rules:
 12. Focus on useful analytical meaning rather than merely repeating
     column metadata.
 
-Return concise, practical interpretations suitable for a data analyst.
+Return concise, practical interpretations in natural, conversational language that a non-technical person can understand.
+
+For `important_fields`, try to include EVERY column in the supplied context, not only
+the most important ones. For each field, explain what it appears to represent and
+why that interpretation is supported. If the meaning is uncertain, say so instead
+of guessing.
+
+Write like a thoughtful human analyst guiding someone through the dataset, not like
+a documentation generator.
 """
 
 

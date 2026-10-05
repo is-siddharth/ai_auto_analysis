@@ -74,3 +74,13 @@ def test_pipeline_returns_cleaning_recommendations_without_modifying_data():
     assert not result["cleaning_recommendations"].empty
     assert len(result["data"]) == 3
     assert df.loc[0, "Segment"] == "Retail "
+
+
+def test_pipeline_builds_dataset_context_without_semantic_ai():
+    import pandas as pd
+    from src.pipeline import analyze_dataframe
+
+    df = pd.DataFrame({"Category": ["A", "B"], "Sales": [10, 20]})
+    result = analyze_dataframe(df, include_semantic=False)
+    assert result["dataset_context"]["dataset"]["rows"] == 2
+    assert result["dataset_context"]["dataset"]["columns"] == 2

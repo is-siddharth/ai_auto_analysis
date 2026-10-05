@@ -12,7 +12,7 @@ def test_quality_guide_only_returns_detected_issues():
 
 def test_quality_guide_explains_whitespace_and_method():
     df = pd.DataFrame({"Category": ["Retail", "Retail ", "Corporate"]})
-    guides = build_quality_guides(profile_data_quality(df))
+    guides = build_quality_guides(profile_data_quality(df), df)
     whitespace = [g for g in guides if g["issue"] == "Text whitespace"]
     assert whitespace
     assert "false categories" in whitespace[0]["why"]
@@ -21,7 +21,7 @@ def test_quality_guide_explains_whitespace_and_method():
 
 def test_quality_guide_explains_missing_values_without_automating_imputation():
     df = pd.DataFrame({"Category": ["Retail", None, "Corporate"]})
-    guides = build_quality_guides(profile_data_quality(df))
+    guides = build_quality_guides(profile_data_quality(df), df)
     missing = [g for g in guides if g["issue"] == "Missing values"]
     assert missing
     assert "Missing %" in missing[0]["method"]
@@ -30,7 +30,7 @@ def test_quality_guide_explains_missing_values_without_automating_imputation():
 
 def test_quality_guide_explicitly_identifies_extra_trailing_space():
     df = pd.DataFrame({"Category": ["Retail", "Retail ", "Corporate"]})
-    guides = build_quality_guides(profile_data_quality(df))
+    guides = build_quality_guides(profile_data_quality(df), df)
     whitespace = [g for g in guides if g["issue"] == "Text whitespace"][0]
     assert "extra space after" in whitespace["what"]
-    assert "Retail `" in whitespace["what"]
+    assert "Retail " in whitespace["example"]

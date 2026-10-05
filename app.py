@@ -7,15 +7,13 @@ import matplotlib.pyplot as plt
 import streamlit as st
 
 from src.pipeline import analyze_dataset, analyze_dataframe
-from src.ingestion.loader import load_raw_dataset
 from src.analysis.engine import run_analysis
 from src.analysis.kpis import calculate_kpi
 from src.analysis.filters import recommend_filters
 from src.analysis.charts import CHART_OPTIONS
 from src.profiling.cleaning import apply_cleaning_actions, automated_cleaning_action_ids
 from src.profiling.quality_guide import build_quality_guides
-from src.dashboard.generator import recommend_dashboard_layouts
-from src.excel.workbook import generate_excel_workbook
+from src.ai.qa import ask_question
 
 
 # ============================================================
@@ -32,6 +30,29 @@ st.set_page_config(
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
+
+def _has_rows(value):
+    """Return True when a quality-result object contains at least one row.
+
+    Quality checks may return pandas DataFrames, lists, dictionaries, or None.
+    Never evaluate a pandas DataFrame directly in a boolean expression.
+    """
+    if value is None:
+        return False
+
+    if isinstance(value, pd.DataFrame):
+        return not value.empty
+
+    if isinstance(value, pd.Series):
+        return not value.empty
+
+    if isinstance(value, (list, tuple, set, dict, str)):
+        return len(value) > 0
+
+    try:
+        return bool(value)
+    except (TypeError, ValueError):
+        return False
 
 def display_field_group(
     title,
@@ -206,150 +227,67 @@ def display_analysis_result(result, analysis_type=None, chart_choice=None):
 
 
 # ============================================================
+
+def _semantic_data(analysis_result):
+    return analysis_result.get("semantic_analysis", {}).get("interpretation", {}).get("data") or {}
+
+
+def _column_interpretation(column, semantic_data, data_dictionary):
+    for item in semantic_data.get("important_fields", []):
+        if item.get("column") == column and item.get("meaning"):
+            return item["meaning"], item.get("confidence", "Medium")
+    match = data_dictionary.loc[data_dictionary["Column"] == column]
+    if not match.empty:
+        row = match.iloc[0]
+        return row.get("Description", "This field's role could not be interpreted confidently."), "Deterministic"
+    return "This field's meaning could not be interpreted confidently from the available evidence.", "Low"
+
+
+def _quality_status(quality):
+    summary = quality.get("summary", {})
+    return (int(summary.get("Total Missing Values", 0) or 0) > 0
+            or int(summary.get("Duplicate Rows", 0) or 0) > 0
+            or _has_rows(quality.get("whitespace"))
+            or _has_rows(quality.get("range_validation"))
+            or _has_rows(quality.get("type_anomalies"))
+            or _has_rows(quality.get("outliers")))
+
+
+# ============================================================
 # APPLICATION HEADER
 # ============================================================
 
-st.title(
-    "DataGuide"
-)
-
-st.write(
-    """
-    Your dataset guide: understand the data, learn what quality issues mean,
-    explore the right analysis, visualize the findings, and learn why each choice makes sense.
-    """
-)
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
+st.title("DataGuide")
+st.caption("Understand your data. Learn what it means. Check its quality. Then analyze it with confidence.")
 
 with st.sidebar:
-
-    st.header(
-        "Workflow"
-    )
-
-    st.markdown(
-        """
-        **1. Upload Dataset**
-
-        **2. Understand Data**
-
-        **3. Check Data Quality**
-
-        **4. Interpret Columns**
-
-        **5. Discover Analysis**
-
-        **6. Explore & Learn**
-
-        **7. Optional Excel Output**
-        """
-    )
-
-    st.divider()
-
-    st.caption(
-        "AI-powered interpretation and advanced analytics "
-        "will be added progressively."
-    )
-
-
-# ============================================================
-# FILE UPLOAD
-# ============================================================
-
-st.header(
-    "Upload Dataset"
-)
-
-uploaded_file = st.file_uploader(
-    "Upload a CSV or Excel file",
-    type=[
-        "csv",
-        "xlsx",
-        "xls"
+    st.header("Your journey")
+    steps = [
+        ("1", "Overview", "Get your bearings"),
+        ("2", "Data Guide", "Understand the story inside the fields"),
+        ("3", "Data Quality", "Learn what needs attention"),
+        ("4", "Data Analysis", "Explore the questions worth asking"),
     ]
-)
+    for number, title, description in steps:
+        st.markdown(f"**{number}. {title}**")
+        st.caption(description)
+    st.divider()
+    st.caption("Python establishes the evidence. AI helps explain what that evidence means.")
 
-
-# ============================================================
-# EMPTY STATE
-# ============================================================
+st.header("Upload your dataset")
+uploaded_file = st.file_uploader("CSV or Excel file", type=["csv", "xlsx", "xls"])
 
 if uploaded_file is None:
-
-    st.info(
-        "Upload a CSV or Excel dataset to begin the analysis."
-    )
-
-    st.subheader(
-        "What this application will eventually provide"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-
-    with col1:
-
-        st.markdown(
-            """
-            ### Understand
-
-            Automatically identify:
-
-            - Dataset structure
-            - Data types
-            - IDs
-            - Dates
-            - Dimensions
-            - Measures
-            - Geographic fields
-            """
-        )
-
-
-    with col2:
-
-        st.markdown(
-            """
-            ### Analyze
-
-            Discover:
-
-            - Trends
-            - Comparisons
-            - Rankings
-            - Contributions
-            - KPIs
-            - Business questions
-            """
-        )
-
-
-    with col3:
-
-        st.markdown(
-            """
-            ### Learn & Present
-
-            Explore the dataset in one place:
-
-            - Recommended analysis
-            - Interactive visuals
-            - KPI explanations
-            - Outlier learning
-            - Contextual data-quality lessons
-            """
-        )
-
-
+    st.markdown("### Start with a file, not a blank canvas")
+    st.write("DataGuide takes you from a raw dataset to a clear understanding of what the data is saying. First you see what is here, then you learn what the fields mean, understand quality trade-offs, and finally explore the analysis that makes sense for this dataset.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown("**Understand**\n\nRows, columns, types, field roles, dates, measures and dimensions.")
+    c2.markdown("**Check**\n\nMissing values, duplicates, whitespace, ranges, type issues and IQR outliers.")
+    c3.markdown("**Ask**\n\nWhat is this dataset? What does this field mean? What should I analyze?")
+    c4.markdown("**Analyze**\n\nRecommended KPIs, questions, calculations, visuals and guided exploration.")
+    st.info("Upload a dataset to begin. The DataGuide assistant will stay available in the bottom-right corner.")
     st.stop()
 
-
-# ============================================================
 # TEMPORARY FILE
 # ============================================================
 
@@ -399,6 +337,7 @@ try:
         st.session_state["cleaning_working_df"] = raw_analysis_result["data"].copy()
         st.session_state["cleaning_audit"] = pd.DataFrame()
         st.session_state["cleaning_applied"] = False
+        st.session_state["assistant_history"] = []
 
     working_df = st.session_state["cleaning_working_df"]
 
@@ -432,7 +371,7 @@ try:
     # Build contextual learning lessons from the active dataset quality report.
     # This keeps the Data Quality teaching layer aligned with the current
     # working dataset after any approved cleaning has been applied.
-    quality_guides = build_quality_guides(quality)
+    quality_guides = build_quality_guides(quality, df)
 
     relationships = analysis_result[
         "relationships"
@@ -467,10 +406,7 @@ try:
     # SUCCESS
     # ========================================================
 
-    st.success(
-        f"Dataset successfully analyzed: "
-        f"{uploaded_file.name}"
-    )
+    st.success(f"Ready to explore: {uploaded_file.name}")
 
 
     # ========================================================
@@ -514,24 +450,58 @@ try:
     )
 
 
+
+
+    # Persistent assistant: questions are its job; teaching the dataset is the Data Guide's job.
+    st.markdown("""
+    <style>
+    div[data-testid="stPopover"] {
+        position: fixed !important;
+        right: 1.25rem !important;
+        bottom: 1.25rem !important;
+        z-index: 9999 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    with st.popover("💬 Ask DataGuide"):
+        st.markdown("### Ask about this dataset")
+        st.caption("Ask about fields, concepts, relationships, quality findings or useful next steps. Answers are grounded in this dataset.")
+        for item in st.session_state.get("assistant_history", [])[-4:]:
+            with st.chat_message(item["role"]):
+                st.write(item["content"])
+        assistant_question = st.text_area(
+            "Question",
+            placeholder="Why is Profit useful here? What does this column mean?",
+            height=90,
+            key="assistant_question",
+        )
+        if st.button("Ask", type="primary", key="assistant_ask"):
+            if not assistant_question.strip():
+                st.warning("Write a question first.")
+            else:
+                with st.spinner("Thinking about the dataset..."):
+                    try:
+                        answer = ask_question(analysis_result.get("dataset_context", {}), assistant_question)
+                        response_text = answer.get("answer") or "I could not produce an answer."
+                    except Exception as error:
+                        response_text = (
+                            "The AI service is temporarily unavailable. Data Guide and Data Analysis are still available, "
+                            "and no dataset work has been lost. " + str(error)
+                        )
+                st.session_state.setdefault("assistant_history", []).extend([
+                    {"role": "user", "content": assistant_question},
+                    {"role": "assistant", "content": response_text},
+                ])
+                st.rerun()
+
     # ========================================================
     # MAIN TABS
     # ========================================================
 
-    (
-        overview_tab,
-        quality_tab,
-        interpretation_tab,
-        analysis_tab,
-    generate_tab
-    ) = st.tabs(
-        [
-            "Overview",
-            "Data Quality",
-            "Data Interpretation",
-            "Analysis",
-            "Generate"
-        ]
+    # The tabs form one narrative: map → meaning → trust → analysis.
+    overview_tab, guide_tab, quality_tab, analysis_tab = st.tabs(
+        ["Overview", "Data Guide", "Data Quality", "Data Analysis"]
     )
 
 
@@ -540,6 +510,19 @@ try:
     # ========================================================
 
     with overview_tab:
+
+        semantic_data = analysis_result.get("semantic_analysis", {}).get("interpretation", {}).get("data")
+        semantic_data = _semantic_data(analysis_result)
+        if semantic_data:
+            st.markdown("### What DataGuide sees")
+            st.write(semantic_data.get("dataset_summary", ""))
+            c1, c2 = st.columns(2)
+            with c1:
+                st.caption(f"Likely domain: {semantic_data.get('likely_domain', 'Uncertain')}")
+            with c2:
+                st.caption(f"Interpretation confidence: {semantic_data.get('confidence', 'Unknown')}")
+        else:
+            st.info("The AI interpretation is unavailable, but the deterministic dataset map is ready. Data Guide can still explain the structure and analytical roles.")
 
         st.subheader(
             "Data Preview"
@@ -550,14 +533,14 @@ try:
             use_container_width=True
         )
 
+        st.subheader("Column Structure")
+        type_summary = pd.DataFrame({"Column": df.columns, "Storage Type": [str(dtype) for dtype in df.dtypes]})
+        st.dataframe(type_summary, use_container_width=True, hide_index=True)
 
-        st.subheader(
-            "Column Structure"
-        )
+        st.subheader("Analytical roles")
 
         st.caption(
-            "Detected analytical role and storage characteristics "
-            "for each column."
+            "What each field appears to be useful for in analysis."
         )
 
         st.dataframe(
@@ -567,14 +550,95 @@ try:
 
 
     # ========================================================
-    # TAB 2 — DATA QUALITY
+        # TAB 2 — DATA GUIDE
+    # ========================================================
+
+    with guide_tab:
+        st.header("Data Guide")
+        st.write("This is the heart of the learning experience. The goal is not to show you more metadata. It is to help you answer a simpler question: **What is this data actually about, and what can I sensibly learn from it?**")
+
+        semantic_data = _semantic_data(analysis_result)
+        semantic_meta = analysis_result.get("semantic_analysis", {}).get("interpretation", {})
+
+        st.markdown("## What this dataset is trying to tell you")
+        if semantic_data.get("dataset_summary"):
+            st.write(semantic_data["dataset_summary"])
+            st.caption(f"Likely domain: **{semantic_data.get('likely_domain', 'Uncertain')}** · Interpretation confidence: {semantic_data.get('confidence', 'Unknown')}")
+        else:
+            st.write("The AI interpretation is unavailable right now, so DataGuide is using the dataset's structure, field types and observed values as the guide. That is less semantic, but it is still grounded in the actual file.")
+            if semantic_meta.get("message"):
+                st.caption(semantic_meta["message"])
+
+        st.markdown("## The main pieces of the story")
+        entities = semantic_data.get("entities", [])
+        if entities:
+            st.write("**Important entities:** " + ", ".join(str(x) for x in entities))
+        else:
+            ids = analytical_fields.get("ids", [])
+            dims = analytical_fields.get("dimensions", [])
+            st.write("The dataset appears to revolve around " + (", ".join(map(str, ids[:4])) if ids else "the available record fields") + ". You can compare those records through " + (", ".join(map(str, dims[:5])) if dims else "the available categorical fields") + ".")
+
+        st.markdown("## What you can learn from it")
+        opportunities = semantic_data.get("analytical_opportunities", [])
+        if opportunities:
+            for item in opportunities[:6]:
+                st.markdown(f"**{item.get('question', 'Useful analytical question')}** · {item.get('priority', 'Medium')} priority")
+                if item.get("reason"):
+                    st.caption(item["reason"])
+        elif not analysis_questions.empty:
+            for _, row in analysis_questions.head(6).iterrows():
+                st.markdown(f"**{row['Question']}**")
+                st.caption(row.get("Rationale", "This question was generated from the available analytical fields."))
+        else:
+            st.info("No strong analytical questions could be inferred from the current field structure.")
+
+        st.markdown("## What each column means")
+        st.caption("When the LLM has enough evidence, you get a semantic explanation. When it does not, DataGuide falls back to the deterministic role instead of pretending to know.")
+        for column in df.columns:
+            meaning, confidence = _column_interpretation(column, semantic_data, data_dictionary)
+            row = data_dictionary.loc[data_dictionary["Column"] == column].iloc[0]
+            with st.expander(f"{column} · {row['Classification']}"):
+                st.write(meaning)
+                st.caption(f"Confidence: {confidence} · Stored as {row['Data Type']} · {int(row['Unique Values']):,} unique non-missing values")
+                st.info(f"In analysis, this field can typically be used as: {row['Description']}")
+
+        st.markdown("## How the fields work together")
+        if relationships is not None and not relationships.empty:
+            st.write("DataGuide found these useful date relationships:")
+            st.dataframe(relationships, use_container_width=True)
+        else:
+            date_fields = analytical_fields.get("dates", [])
+            measure_fields = analytical_fields.get("measures", [])
+            dimensions = analytical_fields.get("dimensions", [])
+            st.write(
+                "Read the dataset in three layers: **when** things happened"
+                + (f" ({', '.join(map(str, date_fields[:3]))})" if date_fields else "")
+                + ", **what** can be measured"
+                + (f" ({', '.join(map(str, measure_fields[:4]))})" if measure_fields else "")
+                + ", and **how records can be grouped**"
+                + (f" ({', '.join(map(str, dimensions[:4]))})" if dimensions else "")
+                + "."
+            )
+
+        ambiguities = semantic_data.get("ambiguities", [])
+        if ambiguities:
+            st.markdown("## What DataGuide is not fully sure about")
+            for item in ambiguities[:8]:
+                st.warning(f"**{item.get('column', 'Field')}** — {item.get('issue', 'Interpretation is uncertain')}. {item.get('suggestion', '')}")
+
+        st.markdown("## A sensible place to start")
+        st.write("You do not need to analyze everything. Start with the highest-priority question that matches the purpose of your work, then move to the comparisons or trends that explain it. Data Analysis will turn those recommendations into calculations and visuals.")
+        st.info("Next: open **Data Quality**. Before trusting a story, check whether anything could distort it.")
+
+# TAB 3 — DATA QUALITY
     # ========================================================
 
     with quality_tab:
 
-        st.subheader(
-            "Data Quality Summary"
-        )
+        st.header("Data Quality")
+        st.write("Now that you know what the dataset appears to mean, the next question is whether anything inside it could make that story misleading. DataGuide only teaches issues it actually finds in this file.")
+
+        st.subheader("Data Quality Summary")
 
         quality_summary = quality[
             "summary"
@@ -620,27 +684,19 @@ try:
         # OVERALL STATUS
         # ----------------------------------------------------
 
-        if (
-            quality_summary[
-                "Total Missing Values"
-            ] == 0
-            and
-            quality_summary[
-                "Duplicate Rows"
-            ] == 0
+        if st.session_state.get("cleaning_applied", False):
+            st.success("A cleaning pass has been applied. The working dataset used by Analysis is the cleaned version.")
+        elif (
+            quality_summary["Total Missing Values"] == 0
+            and quality_summary["Duplicate Rows"] == 0
+            and not _has_rows(quality.get("whitespace"))
+            and not _has_rows(quality.get("range_validation"))
+            and not _has_rows(quality.get("type_anomalies"))
+            and not _has_rows(quality.get("outliers"))
         ):
-
-            st.success(
-                "No missing values or duplicate rows "
-                "were detected."
-            )
-
+            st.success("No issues were detected by the current quality checks.")
         else:
-
-            st.warning(
-                "Potential data-quality issues were detected. "
-                "Review the checks below."
-            )
+            st.warning("This dataset is not fully clean according to the current checks. Review the lessons below before interpreting the analysis.")
 
 
         # ----------------------------------------------------
@@ -1034,155 +1090,34 @@ try:
 
 
     # ========================================================
-    # TAB 3 — DATA INTERPRETATION
-    # ========================================================
-
-    with interpretation_tab:
-
-        st.subheader(
-            "Data Dictionary"
-        )
-
-        st.caption(
-            "A structured interpretation of detected "
-            "columns and their analytical roles."
-        )
-
-        st.dataframe(
-            data_dictionary,
-            use_container_width=True
-        )
-
-
-        st.divider()
-
-
-        st.subheader(
-            "Analytical Field Groups"
-        )
-
-        st.caption(
-            "Columns are grouped according to their "
-            "current analytical role."
-        )
-
-
-        # ----------------------------------------------------
-        # ROW 1
-        # ----------------------------------------------------
-
-        field_col1, field_col2, field_col3 = (
-            st.columns(3)
-        )
-
-
-        with field_col1:
-
-            display_field_group(
-                "Identifiers",
-                analytical_fields[
-                    "ids"
-                ]
-            )
-
-
-        with field_col2:
-
-            display_field_group(
-                "Dates",
-                analytical_fields[
-                    "dates"
-                ]
-            )
-
-
-        with field_col3:
-
-            display_field_group(
-                "Measures",
-                analytical_fields[
-                    "measures"
-                ]
-            )
-
-
-        # ----------------------------------------------------
-        # ROW 2
-        # ----------------------------------------------------
-
-        field_col4, field_col5, field_col6 = (
-            st.columns(3)
-        )
-
-
-        with field_col4:
-
-            display_field_group(
-                "Dimensions",
-                analytical_fields[
-                    "dimensions"
-                ]
-            )
-
-
-        with field_col5:
-
-            display_field_group(
-                "Geographic Fields",
-                analytical_fields[
-                    "geographic"
-                ]
-            )
-
-
-        with field_col6:
-
-            display_field_group(
-                "Text Fields",
-                analytical_fields[
-                    "text"
-                ]
-            )
-
-
-        # ----------------------------------------------------
-        # ROW 3
-        # ----------------------------------------------------
-
-        st.divider()
-
-
-        display_field_group(
-            "Boolean Fields",
-            analytical_fields[
-                "boolean"
-            ]
-        )
-
-
-    # ========================================================
-    # TAB 4 — ANALYSIS
+    # TAB 4 — DATA ANALYSIS
     # ========================================================
 
     with analysis_tab:
 
-        st.subheader("Explore the Dataset")
-        st.caption(
-            "This tab is your analysis workspace. Select KPIs and questions to study the data, "
-            "then use the interactive filters below to change what the charts and results show. "
-            "Nothing selected here controls the final Excel workbook."
+        st.subheader("Guided Analysis")
+        quality_summary = quality.get("summary", {})
+        quality_issue = (
+            int(quality_summary.get("Total Missing Values", 0) or 0) > 0
+            or int(quality_summary.get("Duplicate Rows", 0) or 0) > 0
+            or _has_rows(quality.get("whitespace"))
+            or _has_rows(quality.get("range_validation"))
+            or _has_rows(quality.get("type_anomalies"))
+            or _has_rows(quality.get("outliers"))
         )
+        if quality_issue and not st.session_state.get("cleaning_applied", False):
+            st.warning("This dataset still has detected quality issues. Analysis is based on the current data and may be affected. Review Data Quality and apply the recommended safe cleaning actions when appropriate.")
+        else:
+            st.success("Analysis is running on the current working dataset.")
+        st.caption("Start with the recommended questions. Use filters and visual choices only when you want to explore further.")
 
         # ----------------------------------------------------
         # EXPLORATION FILTERS / SLICERS
         # ----------------------------------------------------
 
         filter_recommendations = recommend_filters(df, analytical_fields)
-        st.markdown("### Explore with Filters / Slicers")
-        st.caption(
-            "These controls act like dashboard slicers for this analysis workspace. "
-            "Changing a selection recalculates the displayed KPI and analysis results."
-        )
+        st.markdown("### Optional filters")
+        st.caption("Use these only if you want to focus the analysis on a particular segment, region, category, or date.")
 
         exploration_df = df.copy()
         active_exploration_filters = {}
@@ -1233,41 +1168,33 @@ try:
         st.divider()
 
         # ----------------------------------------------------
-        # GUIDED EXPLORATION
+        # EXPLORATION KPIs
         # ----------------------------------------------------
 
-        st.subheader("Start with the recommended questions")
-        st.caption(
-            "You do not need to run everything. Start with the highest-priority questions, "
-            "then explore the result and choose a visual that helps you understand it."
-        )
-
-        # Keep the main workspace intentionally small. Advanced options remain available below.
-        recommended_kpis = kpi_recommendations.head(6) if not kpi_recommendations.empty else kpi_recommendations
-        recommended_analyses = analysis_questions.copy()
-        if not recommended_analyses.empty:
-            priority_order = {"High": 0, "Medium": 1, "Low": 2}
-            recommended_analyses["_priority_order"] = recommended_analyses["Priority"].map(priority_order).fillna(9)
-            recommended_analyses = recommended_analyses.sort_values(["_priority_order"]).head(5).drop(columns=["_priority_order"])
+        st.subheader("1. Start with a KPI")
+        st.caption("Choose one or two useful measures. DataGuide calculates them on the current filtered data.")
 
         exploration_kpis = []
-        if not recommended_kpis.empty:
-            st.markdown("#### Useful KPIs")
-            kpi_columns = st.columns(min(3, len(recommended_kpis)))
-            for position, (index, row) in enumerate(recommended_kpis.iterrows()):
-                with kpi_columns[position % len(kpi_columns)]:
-                    selected = st.checkbox(
-                        row["KPI"],
-                        value=False,
-                        key=f"explore_kpi_{index}",
-                        help=f"{row['Calculation']} | {row['Rationale']}",
-                    )
+        kpi_source = kpi_recommendations.head(6)
+        if kpi_source.empty:
+            st.info("No strong KPI recommendations could be inferred from this dataset.")
+        else:
+            kpi_columns = st.columns(3)
+            for pos, (index, row) in enumerate(kpi_source.iterrows()):
+                with kpi_columns[pos % 3]:
+                    selected = st.checkbox(row["KPI"], value=False, key=f"explore_kpi_{index}", help=f"{row['Calculation']} | {row['Rationale']}")
                     st.caption(f"{row['Category']} · {row['Calculation']}")
                     if selected:
                         exploration_kpis.append(index)
+            if len(kpi_recommendations) > 6:
+                with st.expander("See more KPI recommendations"):
+                    for index, row in kpi_recommendations.iloc[6:].iterrows():
+                        selected = st.checkbox(row["KPI"], value=False, key=f"explore_kpi_more_{index}", help=f"{row['Calculation']} | {row['Rationale']}")
+                        if selected:
+                            exploration_kpis.append(index)
 
         if exploration_kpis:
-            st.markdown("#### KPI results")
+            st.markdown("#### Selected KPI Results")
             calculated_exploration_kpis = []
             for index in exploration_kpis:
                 recommendation = kpi_recommendations.loc[index]
@@ -1275,6 +1202,7 @@ try:
                     calculated_exploration_kpis.append(calculate_kpi(exploration_df, recommendation))
                 except Exception as error:
                     st.error(f"Could not calculate KPI '{recommendation['KPI']}': {error}")
+
             if calculated_exploration_kpis:
                 cols = st.columns(min(4, len(calculated_exploration_kpis)))
                 for pos, kpi in enumerate(calculated_exploration_kpis):
@@ -1290,20 +1218,36 @@ try:
                             display_value = f"{value:,}"
                         st.metric(kpi["KPI"], display_value)
 
+        st.divider()
+
+        # ----------------------------------------------------
+        # EXPLORATION ANALYSES
+        # ----------------------------------------------------
+
+        st.subheader("2. Questions DataGuide recommends")
+        st.caption("Start with the first few questions. They are ordered by analytical priority for this dataset.")
+
         exploration_analysis_indices = []
-        if not recommended_analyses.empty:
-            st.markdown("#### Questions to investigate")
-            for index, row in recommended_analyses.iterrows():
+        if analysis_questions.empty:
+            st.info("No analytical recommendations could be generated from this dataset.")
+        else:
+            primary_questions = analysis_questions.head(6)
+            for index, row in primary_questions.iterrows():
                 priority = row.get("Priority", "Medium")
                 chart_match = chart_recommendations[chart_recommendations["Analysis Index"] == index]
                 chart_name = chart_match.iloc[0]["Recommended Chart"] if not chart_match.empty else "Table"
-                label = f"{row['Question']}"
-                help_text = f"{priority} priority · Recommended visual: {chart_name}"
-                if st.checkbox(label, value=False, key=f"explore_analysis_{index}", help=help_text):
+                label = f"{row['Question']}  ·  {priority} priority  ·  {chart_name}"
+                if st.checkbox(label, value=False, key=f"explore_analysis_{index}", help=row.get("Rationale", "")):
                     exploration_analysis_indices.append(index)
+            if len(analysis_questions) > 6:
+                with st.expander("See more recommended questions"):
+                    for index, row in analysis_questions.iloc[6:].iterrows():
+                        priority = row.get("Priority", "Medium")
+                        if st.checkbox(f"{row['Question']}  ·  {priority} priority", value=False, key=f"explore_analysis_more_{index}", help=row.get("Rationale", "")):
+                            exploration_analysis_indices.append(index)
 
         if exploration_analysis_indices:
-            st.markdown("#### Results")
+            st.markdown("#### Selected Analysis Results")
             for index in exploration_analysis_indices:
                 recommendation = analysis_questions.loc[index]
                 st.markdown(f"**{recommendation['Question']}**")
@@ -1316,18 +1260,21 @@ try:
                     )
                     if visual_choices != ["Table / KPI"]:
                         selected_visual = st.selectbox(
-                            "Visual",
+                            "Choose a visual to explore",
                             visual_choices,
                             index=0,
                             key=f"explore_visual_{index}",
                             help=(
-                                "DataGuide recommends the first option. Other choices are shown only "
-                                "when they are analytically reasonable."
+                                "DataGuide recommends the first option. Other options are shown when "
+                                "they are analytically reasonable, so you can compare visual choices and learn why they differ."
                             ),
                         )
                         st.caption(
-                            f"Recommended: {visual_choices[0]}. Changing the visual changes the presentation, not the calculation."
+                            f"Recommended visual: {visual_choices[0]}. Your choice changes only the display, not the underlying calculation."
                         )
+                        chart_match = chart_recommendations[chart_recommendations["Analysis Index"] == index]
+                        if not chart_match.empty:
+                            st.info(f"Why this visual: {chart_match.iloc[0]['Why This Chart']}")
                     else:
                         selected_visual = "Table / KPI"
                     display_analysis_result(
@@ -1338,301 +1285,11 @@ try:
                 except Exception as error:
                     st.error(f"Could not generate this analysis: {error}")
 
-        with st.expander("Optional: explore more questions and KPIs"):
-            if not kpi_recommendations.empty and len(kpi_recommendations) > len(recommended_kpis):
-                st.markdown("**More KPIs**")
-                more_kpis = kpi_recommendations.iloc[len(recommended_kpis):]
-                for index, row in more_kpis.iterrows():
-                    st.checkbox(
-                        row["KPI"],
-                        value=False,
-                        key=f"explore_kpi_extra_{index}",
-                        help=f"{row['Calculation']} | {row['Rationale']}",
-                    )
-            if not analysis_questions.empty and len(analysis_questions) > len(recommended_analyses):
-                st.markdown("**More analysis questions**")
-                recommended_ids = set(recommended_analyses.index)
-                for index, row in analysis_questions.iterrows():
-                    if index in recommended_ids:
-                        continue
-                    priority = row.get("Priority", "Medium")
-                    chart_match = chart_recommendations[chart_recommendations["Analysis Index"] == index]
-                    chart_name = chart_match.iloc[0]["Recommended Chart"] if not chart_match.empty else "Table"
-                    st.checkbox(
-                        row["Question"],
-                        value=False,
-                        key=f"explore_analysis_extra_{index}",
-                        help=f"{priority} priority · Recommended visual: {chart_name}",
-                    )
-
-        with st.expander("Learn more about the methods"):
-            st.caption(
-                "These sections explain the tools DataGuide used or recommends for this dataset. "
-                "They are optional learning material, not extra work you must complete."
-            )
-            st.markdown("**Excel functions you can practice**")
-            if excel_function_recommendations.empty:
-                st.info("No specific Excel-function opportunities were inferred.")
-            else:
-                st.dataframe(excel_function_recommendations, use_container_width=True, hide_index=True)
-
-            st.markdown("**Why these visuals were recommended**")
-            if chart_recommendations.empty:
-                st.info("No chart recommendations were generated.")
-            else:
-                st.dataframe(chart_recommendations, use_container_width=True, hide_index=True)
-
-        st.info(
-            "DataGuide's main job here is to guide you: start with the recommended questions, "
-            "inspect the result, then use the visual choice to learn how the same finding can be communicated."
-        )
+        st.divider()
+        st.info("DataGuide calculates the answer first, then recommends a visual. Changing the visual changes the presentation, not the underlying calculation.")
 
     # ========================================================
-    # TAB 5 — GENERATE
-    # ========================================================
-
-    with generate_tab:
-
-        st.subheader("Build Your Final Deliverable")
-        st.caption(
-            "This is a separate final-selection workspace. What you select here determines what goes into the generated Excel workbook; "
-            "your exploratory choices in the Analysis tab do not carry over."
-        )
-
-        # ----------------------------------------------------
-        # FINAL WORKBOOK OUTPUT SELECTIONS
-        # ----------------------------------------------------
-
-        st.markdown("### 1. Choose Final Workbook KPIs")
-        st.caption("Select only the KPIs you want included as dedicated KPI sheets in the final workbook.")
-        generation_kpis = []
-        if kpi_recommendations.empty:
-            st.info("No KPI recommendations are available.")
-        else:
-            kpi_columns = st.columns(3)
-            for index, row in kpi_recommendations.iterrows():
-                with kpi_columns[index % 3]:
-                    selected = st.checkbox(
-                        row["KPI"],
-                        value=False,
-                        key=f"generate_kpi_{index}",
-                        help=f"{row['Calculation']} | {row['Rationale']}",
-                    )
-                    st.caption(f"{row['Category']} · {row['Calculation']}")
-                    if selected:
-                        generation_kpis.append(index)
-
-        st.divider()
-
-        st.markdown("### 2. Choose Final Workbook Analyses")
-        st.caption("Select the analytical questions that should become dedicated analysis sheets in the final workbook.")
-        generation_analysis_indices = []
-        if analysis_questions.empty:
-            st.info("No analysis recommendations are available.")
-        else:
-            for index, row in analysis_questions.iterrows():
-                priority = row.get("Priority", "Medium")
-                chart_match = chart_recommendations[chart_recommendations["Analysis Index"] == index]
-                chart_name = chart_match.iloc[0]["Recommended Chart"] if not chart_match.empty else "Table"
-                label = f"{row['Question']} — {row['Analysis Type']} — Suggested visual: {chart_name} · {priority} priority"
-                if st.checkbox(label, value=False, key=f"generate_analysis_{index}"):
-                    generation_analysis_indices.append(index)
-
-        st.divider()
-
-        # Dataset-aware layouts are based on the final selections, not exploration selections.
-        dashboard_layouts = recommend_dashboard_layouts(
-            analytical_fields,
-            selected_kpi_count=len(generation_kpis),
-            selected_analysis_count=len(generation_analysis_indices),
-        )
-
-        st.markdown("### 3. Choose a Dashboard Layout")
-        st.caption("This controls the final dashboard template, not the exploratory analysis workspace.")
-
-        def render_layout_preview(layout):
-            key = layout.get("Key", "balanced_grid")
-            blocks = {
-                "kpi_left_slicer": [
-                    ("header", "DASHBOARD"), ("kpis", "KPI 1   |   KPI 2   |   KPI 3   |   KPI 4"),
-                    ("slicer", "FILTERS / SLICERS"), ("chart", "CHART 1   |   CHART 2"), ("chart", "CHART 3   |   CHART 4"),
-                ],
-                "kpi_top_trend": [
-                    ("header", "DASHBOARD"), ("kpis", "KPI 1   |   KPI 2   |   KPI 3   |   KPI 4"),
-                    ("hero", "HERO TREND / MAIN ANALYSIS"), ("chart", "CHART 2   |   CHART 3"),
-                ],
-                "hero_chart": [
-                    ("header", "DASHBOARD"), ("kpis", "KPI 1   |   KPI 2   |   KPI 3"),
-                    ("hero", "HERO CHART / MAIN STORY"), ("chart", "CHART 2   |   CHART 3"),
-                ],
-                "comparison_board": [
-                    ("header", "DASHBOARD"), ("kpis", "KPI 1   |   KPI 2   |   KPI 3"),
-                    ("slicer", "FILTERS / SLICERS"), ("chart", "COMPARISON 1   |   COMPARISON 2"), ("chart", "COMPARISON 3   |   COMPARISON 4"),
-                ],
-                "balanced_grid": [
-                    ("header", "DASHBOARD"), ("kpis", "KPI 1   |   KPI 2   |   KPI 3   |   KPI 4"),
-                    ("slicer", "FILTERS / SLICERS"), ("chart", "CHART 1   |   CHART 2"), ("chart", "CHART 3   |   CHART 4"),
-                ],
-            }
-            html = '<div style="border:2px solid #334155;border-radius:10px;padding:10px;background:#f8fafc;color:#111827;min-height:260px;">'
-            for kind, text_value in blocks.get(key, blocks["balanced_grid"]):
-                if kind == "header":
-                    html += f'<div style="background:#1e293b;color:#ffffff;padding:9px;border-radius:6px;margin-bottom:7px;text-align:center;font-weight:700;">{text_value}</div>'
-                elif kind == "kpis":
-                    html += f'<div style="background:#dbeafe;color:#111827;border:1px solid #60a5fa;padding:12px;border-radius:6px;margin-bottom:7px;text-align:center;font-size:12px;font-weight:700;">{text_value}</div>'
-                elif kind == "slicer":
-                    html += f'<div style="background:#fef3c7;color:#111827;border:2px dashed #b45309;padding:12px;border-radius:6px;margin-bottom:7px;text-align:center;font-size:11px;white-space:pre-line;font-weight:700;">{text_value}</div>'
-                elif kind == "hero":
-                    html += f'<div style="background:#e0f2fe;color:#111827;border:2px solid #0284c7;padding:28px 8px;border-radius:6px;margin-bottom:7px;text-align:center;font-size:12px;font-weight:700;">{text_value}</div>'
-                else:
-                    html += f'<div style="background:#ffffff;color:#111827;border:1px solid #64748b;padding:15px 5px;border-radius:6px;margin-bottom:7px;text-align:center;font-size:11px;font-weight:600;">{text_value}</div>'
-            return html + '</div>'
-
-        preview_columns = st.columns(2)
-        for position, layout in enumerate(dashboard_layouts):
-            with preview_columns[position % 2]:
-                st.markdown(f"**{position + 1}. {layout['Layout']}**")
-                st.markdown(render_layout_preview(layout), unsafe_allow_html=True)
-                st.caption(layout["Why It Fits"])
-
-        layout_labels = [layout["Layout"] for layout in dashboard_layouts]
-        selected_layout_label = st.radio("Select the layout to generate", layout_labels, index=0, key="selected_dashboard_layout")
-        selected_layout = next(layout for layout in dashboard_layouts if layout["Layout"] == selected_layout_label)
-
-        st.divider()
-        st.markdown("### 4. Choose Final Dashboard Filters / Slicers")
-        st.caption("These are the filter fields the final dashboard blueprint should reserve space for. They are independent from Analysis-tab exploration filters.")
-
-        filter_options = filter_recommendations["Field"].tolist() if not filter_recommendations.empty else []
-        confirmed_filters = st.multiselect(
-            "Filters / slicers to include in the dashboard template",
-            options=filter_options,
-            default=[],
-            key="generate_filters",
-            help="Select fields the eventual dashboard viewer should be able to use to narrow the displayed data.",
-        )
-        if confirmed_filters:
-            st.info("Selected final-dashboard filters: " + ", ".join(confirmed_filters))
-        else:
-            st.caption("No dashboard filters selected. The workbook will still contain filter-ready source tables.")
-
-        st.divider()
-        st.markdown("### 5. Preview Final Workbook Selection")
-        if not generation_kpis and not generation_analysis_indices:
-            st.warning("Select at least one final KPI or analysis question above.")
-        else:
-            if generation_kpis:
-                st.markdown("#### Final Workbook KPIs")
-                calculated_kpis = []
-                for index in generation_kpis:
-                    recommendation = kpi_recommendations.loc[index]
-                    try:
-                        calculated_kpis.append(calculate_kpi(df, recommendation))
-                    except Exception as error:
-                        st.error(f"Could not calculate KPI '{recommendation['KPI']}': {error}")
-                if calculated_kpis:
-                    cols = st.columns(min(4, len(calculated_kpis)))
-                    for pos, kpi in enumerate(calculated_kpis):
-                        with cols[pos % len(cols)]:
-                            value = kpi["Value"]
-                            if value is None:
-                                display_value = "N/A"
-                            elif kpi["Category"] == "Ratio":
-                                display_value = f"{value:.1%}"
-                            elif isinstance(value, float):
-                                display_value = f"{value:,.2f}"
-                            else:
-                                display_value = f"{value:,}"
-                            st.metric(kpi["KPI"], display_value)
-
-            if generation_analysis_indices:
-                st.markdown("#### Final Workbook Analyses")
-                for index in generation_analysis_indices:
-                    recommendation = analysis_questions.loc[index]
-                    st.markdown(f"**{recommendation['Question']}**")
-                    st.caption(f"{recommendation['Analysis Type']}")
-                    try:
-                        display_analysis_result(run_analysis(df, recommendation))
-                    except Exception as error:
-                        st.error(f"Could not generate this analysis: {error}")
-
-        st.divider()
-        st.markdown("### 6. Generate Final Excel Workbook")
-        st.caption(
-            "The final workbook contains only the KPIs and analyses selected in this Generate tab, plus the source data, cleaned data, data dictionary, learning guide, filter guide, dashboard instructions, and final dashboard template."
-        )
-
-        if st.button("Generate Final Excel Workbook", type="primary", key="generate_workbook"):
-            if not generation_kpis and not generation_analysis_indices:
-                st.warning("Select at least one final KPI or analysis before generating the workbook.")
-            else:
-                generated_kpis, generated_analyses, generation_errors = [], [], []
-                for index in generation_kpis:
-                    recommendation = kpi_recommendations.loc[index]
-                    try:
-                        generated_kpis.append(calculate_kpi(df, recommendation))
-                    except Exception as error:
-                        generation_errors.append(f"KPI '{recommendation['KPI']}': {error}")
-
-                for index in generation_analysis_indices:
-                    recommendation = analysis_questions.loc[index]
-                    try:
-                        result = run_analysis(df, recommendation)
-                        chart_match = chart_recommendations[chart_recommendations["Analysis Index"] == index]
-                        chart_label = str(chart_match.iloc[0]["Recommended Chart"]) if not chart_match.empty else "Table"
-                        generated_analyses.append({
-                            "recommendation": recommendation.to_dict(),
-                            "result": result,
-                            "chart_label": chart_label,
-                        })
-                    except Exception as error:
-                        generation_errors.append(f"Analysis '{recommendation['Question']}': {error}")
-
-                if generation_errors:
-                    st.error("Some selected outputs could not be generated:\n\n" + "\n".join(generation_errors))
-                else:
-                    try:
-                        raw_df = load_raw_dataset(temporary_path)
-                        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx").name
-                        with st.spinner("Building and validating the final Excel workbook..."):
-                            generate_excel_workbook(
-                                output_path=output_path,
-                                raw_df=raw_df,
-                                cleaned_df=df.copy(),
-                                data_dictionary=data_dictionary,
-                                kpis=generated_kpis,
-                                analyses=generated_analyses,
-                                excel_function_recommendations=excel_function_recommendations,
-                                dashboard_layout=selected_layout,
-                                dataset_name=uploaded_file.name,
-                                selected_filters=confirmed_filters,
-                                filter_recommendations=filter_recommendations,
-                                cleaning_audit=st.session_state.get("cleaning_audit", pd.DataFrame()),
-                            )
-                        with open(output_path, "rb") as workbook_file:
-                            workbook_bytes = workbook_file.read()
-                        os.remove(output_path)
-                        st.success(
-                            f"Workbook generated successfully: {len(generated_kpis)} KPI(s), {len(generated_analyses)} analysis sheet(s), {len(confirmed_filters)} filter field(s)."
-                        )
-                        st.download_button(
-                            "Download Final Excel Workbook",
-                            data=workbook_bytes,
-                            file_name=f"{os.path.splitext(uploaded_file.name)[0]}_analytics_output.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="download_workbook",
-                        )
-                    except Exception as error:
-                        st.exception(error)
-
-        st.divider()
-        st.caption(
-            f"Final workbook selection: {len(generation_kpis)} KPI(s) · {len(generation_analysis_indices)} analysis question(s) · {len(confirmed_filters)} dashboard filter(s) · Layout: {selected_layout['Layout']}"
-        )
-
-
-# ============================================================
-# CLEANUP
+    # CLEANUP
 # ============================================================
 
 finally:

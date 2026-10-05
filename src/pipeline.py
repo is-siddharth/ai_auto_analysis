@@ -13,9 +13,8 @@ from src.analysis.recommendations import (
 from src.analysis.kpis import generate_kpi_recommendations
 from src.analysis.excel_functions import generate_excel_function_recommendations
 from src.analysis.charts import recommend_charts
-from src.interpretation.semantic import (
-    build_semantic_analysis,
-)
+from src.interpretation.semantic import build_semantic_analysis
+from src.interpretation.context import build_dataset_context
 
 
 def _safe_relationship_detection(df):
@@ -169,7 +168,34 @@ def analyze_dataframe(df, include_semantic=True):
     )
 
     # ---------------------------------------------------------------
-    # 11. Semantic / AI interpretation
+    # 11. Dataset context for semantic AI and Ask DataGuide
+    # ---------------------------------------------------------------
+
+    try:
+        dataset_context = build_dataset_context(
+            df=df,
+            classification=classification,
+            quality=quality,
+            relationships=relationships,
+            data_dictionary=data_dictionary,
+            analytical_fields=analytical_fields,
+            analysis_questions=analysis_questions,
+            kpi_recommendations=kpi_recommendations,
+            excel_function_recommendations=excel_function_recommendations,
+            chart_recommendations=chart_recommendations,
+        )
+    except Exception as exc:
+        dataset_context = {
+            "dataset": {
+                "rows": int(len(df)),
+                "columns": int(len(df.columns)),
+                "column_names": [str(c) for c in df.columns],
+            },
+            "context_warning": str(exc),
+        }
+
+    # ---------------------------------------------------------------
+    # 12. Semantic / AI interpretation
     # ---------------------------------------------------------------
 
     if include_semantic:
@@ -214,6 +240,7 @@ def analyze_dataframe(df, include_semantic=True):
         "excel_function_recommendations": excel_function_recommendations,
         "chart_recommendations": chart_recommendations,
         "semantic_analysis": semantic_analysis,
+        "dataset_context": dataset_context,
     }
 
 def analyze_dataset(file_path):
