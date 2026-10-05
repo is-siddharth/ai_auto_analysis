@@ -1,10 +1,20 @@
-# AI Data Analytics Assistant
+# DataGuide
 
-An AI-assisted data analytics workflow that turns a raw CSV or Excel dataset into a structured understanding of the data, data-quality checks, analysis recommendations, KPI recommendations, Excel learning opportunities, charts, and a downloadable Excel analysis workbook with a dashboard blueprint.
+DataGuide is an AI-assisted data analytics workflow that turns a raw CSV or Excel dataset into a structured understanding of the data, data-quality checks, analysis recommendations, KPI recommendations, Excel learning opportunities, charts, and a downloadable Excel analysis workbook with a dashboard blueprint.
 
 The project is designed around a practical analyst workflow:
 
 > **Understand the dataset first. Then decide what to calculate, visualize, and communicate.**
+
+## Product idea
+
+> **The dataset itself decides what DataGuide teaches.**
+
+DataGuide does not show a generic cleaning tutorial for every dataset. The Data Quality tab surfaces a contextual lesson only when that issue is actually detected. For each detected issue, it can explain what the issue means, why it matters, show a dataset-relevant example, describe the detection/cleaning method, and then ask the user to approve any executable change.
+
+For example, when trailing spaces are detected, DataGuide can explain how `Retail` and `Retail ` can become false categories, show that trimming removes the extra whitespace, and identify the Excel equivalent as `TRIM()`.
+
+This keeps the application both an analytics assistant and a practical learning guide.
 
 ## Core principle
 
@@ -712,3 +722,7 @@ The human does:
 **Select → Review → Customize → Present**
 
 The goal is not to replace the analyst. It is to remove the uncertainty that usually comes between receiving a new dataset and knowing what to do with it.
+
+### Approval-based data cleaning
+
+The Data Quality tab now separates **detection** from **cleaning**. The application shows explicit cleaning recommendations before changing the working dataset. Users can approve individual actions or use **Let the Assistant Decide**, which applies only high-confidence, low-risk deterministic transformations. The system does not silently drop missing-value rows, outliers, or unusual values. Approved changes are recorded in `04_Cleaning_Log`, while `01_Raw_Data` remains unchanged.

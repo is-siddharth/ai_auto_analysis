@@ -61,3 +61,20 @@ def test_rate_profile_does_not_sum_rate():
     metrics = result["table"]["Metric"].tolist()
     assert "Average" in metrics
     assert "Total" not in metrics
+
+
+def test_distribution_and_outliers_uses_iqr():
+    from src.analysis.engine import run_analysis
+
+    df = pd.DataFrame({"Sales": [10, 11, 12, 13, 14, 15, 100]})
+    result = run_analysis(
+        df,
+        {
+            "Analysis Type": "Distribution & Outliers",
+            "Measure": "Sales",
+            "Dimension": None,
+            "Date Column": None,
+        },
+    )
+    assert result["chart_type"] == "box"
+    assert int(result["table"].loc[result["table"]["Metric"] == "Potential Outliers", "Value"].iloc[0]) == 1

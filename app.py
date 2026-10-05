@@ -1,14 +1,19 @@
+import hashlib
 import os
 import tempfile
 
 import pandas as pd
+import matplotlib.pyplot as plt
 import streamlit as st
 
-from src.pipeline import analyze_dataset
+from src.pipeline import analyze_dataset, analyze_dataframe
 from src.ingestion.loader import load_raw_dataset
 from src.analysis.engine import run_analysis
 from src.analysis.kpis import calculate_kpi
 from src.analysis.filters import recommend_filters
+from src.analysis.charts import CHART_OPTIONS
+from src.profiling.cleaning import apply_cleaning_actions, automated_cleaning_action_ids
+from src.profiling.quality_guide import build_quality_guides
 from src.dashboard.generator import recommend_dashboard_layouts
 from src.excel.workbook import generate_excel_workbook
 
@@ -18,8 +23,8 @@ from src.excel.workbook import generate_excel_workbook
 # ============================================================
 
 st.set_page_config(
-    page_title="AI Data Analytics Assistant",
-    page_icon="📊",
+    page_title="DataGuide",
+    page_icon="🧭",
     layout="wide"
 )
 
@@ -77,120 +82,127 @@ def display_field_group(
     )
 
 
-def display_analysis_result(
-    result
-):
-    """
-    Display a calculated analysis result.
+def _available_visual_choices(analysis_type, result):
+    """Return chart choices that are both educational and compatible with the result."""
+    choices = list(CHART_OPTIONS.get(analysis_type, []))
+    if not choices:
+        return ["Table / KPI"]
 
-    The analysis engine returns:
-        table
-        chart_type
-        x
-        y
-        optional chart_data
-    """
+    table = result.get("table", pd.DataFrame())
+    x_column = result.get("x")
+    if x_column and x_column in table.columns:
+        category_count = int(table[x_column].nunique(dropna=True))
+        if category_count > 10:
+            choices = [c for c in choices if c not in {"Pie Chart", "Donut Chart"}]
 
-    table = result.get(
-        "table"
-    )
+    return choices or ["Table / KPI"]
 
 
-    if table is None:
+def _render_analysis_chart(result, chart_choice):
+    """Render a user-selected visual from deterministic analysis output."""
+    table = result.get("table")
+    chart_data = result.get("chart_data", table)
+    x_column = result.get("x")
+    y_column = result.get("y")
 
-        st.info(
-            "No result was produced."
-        )
-
+    if chart_choice in {None, "Table / KPI"} or chart_data is None:
         return
 
-
-    if table.empty:
-
-        st.info(
-            "The selected analysis did not produce any results."
-        )
-
+    if chart_choice in {"Histogram", "Box Plot"}:
+        if not x_column or x_column not in chart_data.columns:
+            return
+        series = pd.to_numeric(chart_data[x_column], errors="coerce").dropna()
+        if series.empty:
+            return
+        fig, ax = plt.subplots(figsize=(9, 4.8))
+        if chart_choice == "Histogram":
+            ax.hist(series, bins=min(20, max(5, int(series.nunique() ** 0.5))))
+            ax.set_xlabel(x_column)
+            ax.set_ylabel("Frequency")
+            ax.set_title(f"Distribution of {x_column}")
+        else:
+            ax.boxplot(series, vert=False)
+            ax.set_xlabel(x_column)
+            ax.set_yticks([1])
+            ax.set_yticklabels([x_column])
+            ax.set_title(f"Box Plot — {x_column}")
+        fig.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
         return
 
-
-    # --------------------------------------------------------
-    # TABLE
-    # --------------------------------------------------------
-
-    st.dataframe(
-        table,
-        use_container_width=True
-    )
-
-
-    # --------------------------------------------------------
-    # CHART
-    # --------------------------------------------------------
-
-    chart_type = result.get(
-        "chart_type"
-    )
-
-    if chart_type is None:
+    if not x_column or x_column not in chart_data.columns:
         return
 
+    if y_column and y_column in chart_data.columns:
+        frame = chart_data[[x_column, y_column]].dropna().copy()
+    else:
+        frame = chart_data[[x_column]].dropna().copy()
+        frame["Count"] = 1
+        y_column = "Count"
 
-    chart_data = result.get(
-        "chart_data",
-        table
-    )
-
-    x_column = result.get(
-        "x"
-    )
-
-    y_column = result.get(
-        "y"
-    )
-
-
-    if (
-        x_column not in chart_data.columns
-        or
-        y_column not in chart_data.columns
-    ):
-
+    if frame.empty:
         return
 
-
-    chart_frame = (
-        chart_data[
-            [
-                x_column,
-                y_column
-            ]
-        ]
-        .dropna()
-        .set_index(
-            x_column
-        )
-    )
-
-
-    if chart_frame.empty:
+    if chart_choice in {"Pie Chart", "Donut Chart"}:
+        grouped = frame.groupby(x_column, dropna=False)[y_column].sum().sort_values(ascending=False)
+        grouped = grouped.head(10)
+        if grouped.empty or (grouped < 0).any() or grouped.sum() <= 0:
+            st.warning(
+                "A pie/donut chart is not appropriate for this result because the values include negative amounts or do not form a positive whole. "
+                "Use a bar/column chart instead."
+            )
+            return
+        fig, ax = plt.subplots(figsize=(7, 5))
+        wedges, _ = ax.pie(grouped.values, startangle=90)
+        if chart_choice == "Donut Chart":
+            centre = plt.Circle((0, 0), 0.60, fc="white")
+            ax.add_artist(centre)
+        ax.legend(wedges, [str(v) for v in grouped.index], loc="center left", bbox_to_anchor=(1, 0.5))
+        ax.set_title(f"{chart_choice} — {x_column}")
+        fig.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
         return
 
+    if chart_choice == "Line Chart":
+        frame = frame.sort_values(x_column).set_index(x_column)
+        st.line_chart(frame[[y_column]], use_container_width=True)
+        return
 
-    if chart_type == "bar":
+    frame = frame.sort_values(y_column, ascending=False)
+    if chart_choice == "Horizontal Bar Chart":
+        frame = frame.head(min(15, len(frame)))
+        frame = frame.set_index(x_column)
+        st.bar_chart(frame[[y_column]], use_container_width=True)
+        return
 
-        st.bar_chart(
-            chart_frame,
-            use_container_width=True
-        )
+    # Bar/column are both represented with Streamlit's bar chart; the choice
+    # remains visible to the learner even though the rendering is equivalent.
+    frame = frame.head(15).set_index(x_column)
+    st.bar_chart(frame[[y_column]], use_container_width=True)
 
 
-    elif chart_type == "line":
+def display_analysis_result(result, analysis_type=None, chart_choice=None):
+    """Display a calculated result and an optional learner-selected visual."""
+    table = result.get("table")
+    if table is None or table.empty:
+        st.info("The selected analysis did not produce any results.")
+        return
 
-        st.line_chart(
-            chart_frame,
-            use_container_width=True
-        )
+    st.dataframe(table, use_container_width=True)
+
+    if analysis_type is None:
+        return
+
+    choices = _available_visual_choices(analysis_type, result)
+    if choices == ["Table / KPI"]:
+        return
+
+    if chart_choice is None:
+        chart_choice = choices[0]
+
+    _render_analysis_chart(result, chart_choice)
 
 
 # ============================================================
@@ -198,14 +210,13 @@ def display_analysis_result(
 # ============================================================
 
 st.title(
-    "AI Data Analytics Assistant"
+    "DataGuide"
 )
 
 st.write(
     """
-    An intelligent analytics workflow that transforms raw datasets
-    into structured data understanding, data-quality checks,
-    analytical recommendations, and eventually automated Excel outputs.
+    Your dataset guide: understand the data, learn what quality issues mean,
+    explore the right analysis, visualize the findings, and learn why each choice makes sense.
     """
 )
 
@@ -232,9 +243,9 @@ with st.sidebar:
 
         **5. Discover Analysis**
 
-        **6. Generate Results**
+        **6. Explore & Learn**
 
-        **7. Build Excel Output**
+        **7. Optional Excel Output**
         """
     )
 
@@ -322,15 +333,15 @@ if uploaded_file is None:
 
         st.markdown(
             """
-            ### Build
+            ### Learn & Present
 
-            Eventually generate:
+            Explore the dataset in one place:
 
-            - Excel analysis
-            - PivotTables
-            - Charts
-            - KPI sheets
-            - Dashboard structures
+            - Recommended analysis
+            - Interactive visuals
+            - KPI explanations
+            - Outlier learning
+            - Contextual data-quality lessons
             """
         )
 
@@ -373,10 +384,31 @@ try:
         "Analyzing dataset..."
     ):
 
-        analysis_result = analyze_dataset(
+        raw_analysis_result = analyze_dataset(
             temporary_path
         )
 
+    # Keep the original upload immutable. Cleaning is an explicit,
+    # approval-based transformation of the working dataset.
+    upload_bytes = uploaded_file.getvalue()
+    dataset_key = hashlib.md5(upload_bytes).hexdigest()
+
+    if st.session_state.get("cleaning_dataset_key") != dataset_key:
+        st.session_state["cleaning_dataset_key"] = dataset_key
+        st.session_state["cleaning_original_df"] = raw_analysis_result["data"].copy()
+        st.session_state["cleaning_working_df"] = raw_analysis_result["data"].copy()
+        st.session_state["cleaning_audit"] = pd.DataFrame()
+        st.session_state["cleaning_applied"] = False
+
+    working_df = st.session_state["cleaning_working_df"]
+
+    if st.session_state.get("cleaning_applied", False):
+        # Rebuild analytical metadata from the approved working dataset.
+        # This keeps downstream analysis aligned with the actual cleaned data.
+        with st.spinner("Refreshing analysis after approved cleaning..."):
+            analysis_result = analyze_dataframe(working_df)
+    else:
+        analysis_result = raw_analysis_result
 
     # ========================================================
     # EXTRACT RESULTS
@@ -393,6 +425,14 @@ try:
     quality = analysis_result[
         "quality"
     ]
+
+    raw_quality = raw_analysis_result["quality"]
+    cleaning_recommendations = raw_analysis_result["cleaning_recommendations"]
+
+    # Build contextual learning lessons from the active dataset quality report.
+    # This keeps the Data Quality teaching layer aligned with the current
+    # working dataset after any approved cleaning has been applied.
+    quality_guides = build_quality_guides(quality)
 
     relationships = analysis_result[
         "relationships"
@@ -602,6 +642,121 @@ try:
                 "Review the checks below."
             )
 
+
+        # ----------------------------------------------------
+        # APPROVAL-BASED CLEANING
+        # ----------------------------------------------------
+
+        st.divider()
+        st.subheader("Learn & Clean")
+        st.caption(
+            "DataGuide only teaches quality issues that were actually detected in this dataset. "
+            "The lesson explains what the issue means, why it matters, how it is detected, and what method can fix it. "
+            "Cleaning still requires your approval."
+        )
+
+        if quality_guides:
+            st.markdown("#### What this dataset is teaching you")
+            for guide_index, guide in enumerate(quality_guides):
+                with st.expander(
+                    f"{guide['issue']} — {guide['field']}",
+                    expanded=guide_index == 0,
+                ):
+                    st.markdown(f"**What it means**  \n{guide['what']}")
+                    st.markdown(f"**Why it matters**  \n{guide['why']}")
+                    st.markdown(f"**Example**  \n{guide['example']}")
+                    st.info(f"**Detection / method:** {guide['method']}")
+                    st.markdown(f"**How to handle it**  \n{guide['fix']}")
+
+        st.markdown("#### Recommended Cleaning")
+        st.caption(
+            "The application does not silently delete or change data. "
+            "Each recommended action is shown first, and only actions you approve are applied."
+        )
+
+        if st.session_state.get("cleaning_applied", False):
+            original_df = st.session_state["cleaning_original_df"]
+            st.success(
+                f"Approved cleaning is active: {len(original_df):,} original rows → {len(df):,} working rows."
+            )
+            audit = st.session_state.get("cleaning_audit", pd.DataFrame())
+            if not audit.empty:
+                st.dataframe(audit, use_container_width=True, hide_index=True)
+
+            if st.button("Reset to Original Dataset", key="reset_cleaning"):
+                st.session_state["cleaning_working_df"] = original_df.copy()
+                st.session_state["cleaning_audit"] = pd.DataFrame()
+                st.session_state["cleaning_applied"] = False
+                st.rerun()
+        elif cleaning_recommendations.empty:
+            st.success("No high-confidence executable cleaning actions were detected.")
+            st.info(
+                "Other quality findings, such as missing values, outliers, and unusual ranges, "
+                "are deliberately left for review because automatically changing them could alter the meaning of the data."
+            )
+        else:
+            st.info(
+                "Recommended actions are pre-selected only when they are high-confidence and low-risk. "
+                "Missing-value imputation, outlier removal, range correction, and similar judgment-heavy changes are not automated."
+            )
+
+            st.markdown("#### Review each proposed change")
+            approved_action_ids = []
+            for action_index, action in cleaning_recommendations.iterrows():
+                action_id = str(action["Action ID"])
+                selected = st.checkbox(
+                    f"{action['Recommended Action']} — {action['Field']} ({int(action['Affected Rows']):,} affected)",
+                    value=str(action["Default"]) == "Approve",
+                    key=f"clean_action_{action_index}",
+                    help=f"{action['Why']} Confidence: {action['Confidence']}."
+                )
+                st.caption(
+                    f"**Issue:** {action['Issue']} · **Confidence:** {action['Confidence']} · "
+                    f"**Why:** {action['Why']}"
+                )
+                if action_id.startswith("trim_whitespace::"):
+                    st.code("Python: str.strip()    |    Excel equivalent: TRIM(text)", language="text")
+                elif action_id.startswith("blank_text_to_missing::"):
+                    st.code("Rule: blank/whitespace-only text → missing value (pd.NA)    |    Excel concept: IF(TRIM(A2)="","",A2)", language="text")
+                elif action_id == "remove_exact_duplicates":
+                    st.code("Rule: duplicate complete rows → keep first occurrence    |    Excel: Remove Duplicates", language="text")
+                elif action_id == "remove_blank_rows":
+                    st.code("Rule: all fields missing → remove row    |    Excel concept: filter rows where COUNTA(row)=0", language="text")
+                if selected:
+                    approved_action_ids.append(action_id)
+
+            button_col1, button_col2 = st.columns(2)
+            with button_col1:
+                if st.button("Apply Selected Cleaning Actions", type="primary", key="apply_cleaning"):
+                    original_df = st.session_state["cleaning_original_df"]
+                    cleaned_df, audit = apply_cleaning_actions(
+                        original_df,
+                        cleaning_recommendations,
+                        approved_action_ids,
+                    )
+                    st.session_state["cleaning_working_df"] = cleaned_df
+                    st.session_state["cleaning_audit"] = audit
+                    st.session_state["cleaning_applied"] = True
+                    st.rerun()
+
+            with button_col2:
+                if st.button("Let the Assistant Decide", key="auto_cleaning"):
+                    auto_ids = automated_cleaning_action_ids(cleaning_recommendations)
+                    original_df = st.session_state["cleaning_original_df"]
+                    cleaned_df, audit = apply_cleaning_actions(
+                        original_df,
+                        cleaning_recommendations,
+                        auto_ids,
+                    )
+                    st.session_state["cleaning_working_df"] = cleaned_df
+                    st.session_state["cleaning_audit"] = audit
+                    st.session_state["cleaning_applied"] = True
+                    st.rerun()
+
+            st.caption(
+                "Let the Assistant Decide uses a conservative deterministic safety policy in this phase. "
+                "It only applies high-confidence, low-risk transformations; it does not guess how to fill missing values or delete unusual records."
+            )
 
         # ----------------------------------------------------
         # MISSING VALUES
@@ -1078,21 +1233,29 @@ try:
         st.divider()
 
         # ----------------------------------------------------
-        # EXPLORATION KPIs
+        # GUIDED EXPLORATION
         # ----------------------------------------------------
 
-        st.subheader("1. KPIs to Explore")
+        st.subheader("Start with the recommended questions")
         st.caption(
-            "These selections are for learning and exploration only. They are independent from the KPIs you later choose for the final Excel workbook."
+            "You do not need to run everything. Start with the highest-priority questions, "
+            "then explore the result and choose a visual that helps you understand it."
         )
 
+        # Keep the main workspace intentionally small. Advanced options remain available below.
+        recommended_kpis = kpi_recommendations.head(6) if not kpi_recommendations.empty else kpi_recommendations
+        recommended_analyses = analysis_questions.copy()
+        if not recommended_analyses.empty:
+            priority_order = {"High": 0, "Medium": 1, "Low": 2}
+            recommended_analyses["_priority_order"] = recommended_analyses["Priority"].map(priority_order).fillna(9)
+            recommended_analyses = recommended_analyses.sort_values(["_priority_order"]).head(5).drop(columns=["_priority_order"])
+
         exploration_kpis = []
-        if kpi_recommendations.empty:
-            st.info("No strong generic KPI recommendations could be inferred from this dataset.")
-        else:
-            kpi_columns = st.columns(3)
-            for index, row in kpi_recommendations.iterrows():
-                with kpi_columns[index % 3]:
+        if not recommended_kpis.empty:
+            st.markdown("#### Useful KPIs")
+            kpi_columns = st.columns(min(3, len(recommended_kpis)))
+            for position, (index, row) in enumerate(recommended_kpis.iterrows()):
+                with kpi_columns[position % len(kpi_columns)]:
                     selected = st.checkbox(
                         row["KPI"],
                         value=False,
@@ -1104,7 +1267,7 @@ try:
                         exploration_kpis.append(index)
 
         if exploration_kpis:
-            st.markdown("#### Selected KPI Results")
+            st.markdown("#### KPI results")
             calculated_exploration_kpis = []
             for index in exploration_kpis:
                 recommendation = kpi_recommendations.loc[index]
@@ -1112,7 +1275,6 @@ try:
                     calculated_exploration_kpis.append(calculate_kpi(exploration_df, recommendation))
                 except Exception as error:
                     st.error(f"Could not calculate KPI '{recommendation['KPI']}': {error}")
-
             if calculated_exploration_kpis:
                 cols = st.columns(min(4, len(calculated_exploration_kpis)))
                 for pos, kpi in enumerate(calculated_exploration_kpis):
@@ -1128,63 +1290,101 @@ try:
                             display_value = f"{value:,}"
                         st.metric(kpi["KPI"], display_value)
 
-        st.divider()
-
-        # ----------------------------------------------------
-        # EXPLORATION ANALYSES
-        # ----------------------------------------------------
-
-        st.subheader("2. Analysis Questions to Explore")
-        st.caption(
-            "Select questions you want to investigate. Results and charts appear here immediately and respond to the exploration filters above."
-        )
-
         exploration_analysis_indices = []
-        if analysis_questions.empty:
-            st.info("No analytical recommendations could be generated from this dataset.")
-        else:
-            for index, row in analysis_questions.iterrows():
+        if not recommended_analyses.empty:
+            st.markdown("#### Questions to investigate")
+            for index, row in recommended_analyses.iterrows():
                 priority = row.get("Priority", "Medium")
                 chart_match = chart_recommendations[chart_recommendations["Analysis Index"] == index]
                 chart_name = chart_match.iloc[0]["Recommended Chart"] if not chart_match.empty else "Table"
-                label = f"{row['Question']} — {row['Analysis Type']} — {chart_name} · {priority} priority"
-                if st.checkbox(label, value=False, key=f"explore_analysis_{index}"):
+                label = f"{row['Question']}"
+                help_text = f"{priority} priority · Recommended visual: {chart_name}"
+                if st.checkbox(label, value=False, key=f"explore_analysis_{index}", help=help_text):
                     exploration_analysis_indices.append(index)
 
         if exploration_analysis_indices:
-            st.markdown("#### Selected Analysis Results")
+            st.markdown("#### Results")
             for index in exploration_analysis_indices:
                 recommendation = analysis_questions.loc[index]
                 st.markdown(f"**{recommendation['Question']}**")
                 st.caption(f"{recommendation['Analysis Type']}")
                 try:
-                    display_analysis_result(run_analysis(exploration_df, recommendation))
+                    analysis_result_for_display = run_analysis(exploration_df, recommendation)
+                    visual_choices = _available_visual_choices(
+                        recommendation["Analysis Type"],
+                        analysis_result_for_display,
+                    )
+                    if visual_choices != ["Table / KPI"]:
+                        selected_visual = st.selectbox(
+                            "Visual",
+                            visual_choices,
+                            index=0,
+                            key=f"explore_visual_{index}",
+                            help=(
+                                "DataGuide recommends the first option. Other choices are shown only "
+                                "when they are analytically reasonable."
+                            ),
+                        )
+                        st.caption(
+                            f"Recommended: {visual_choices[0]}. Changing the visual changes the presentation, not the calculation."
+                        )
+                    else:
+                        selected_visual = "Table / KPI"
+                    display_analysis_result(
+                        analysis_result_for_display,
+                        recommendation["Analysis Type"],
+                        selected_visual,
+                    )
                 except Exception as error:
                     st.error(f"Could not generate this analysis: {error}")
 
-        st.divider()
+        with st.expander("Optional: explore more questions and KPIs"):
+            if not kpi_recommendations.empty and len(kpi_recommendations) > len(recommended_kpis):
+                st.markdown("**More KPIs**")
+                more_kpis = kpi_recommendations.iloc[len(recommended_kpis):]
+                for index, row in more_kpis.iterrows():
+                    st.checkbox(
+                        row["KPI"],
+                        value=False,
+                        key=f"explore_kpi_extra_{index}",
+                        help=f"{row['Calculation']} | {row['Rationale']}",
+                    )
+            if not analysis_questions.empty and len(analysis_questions) > len(recommended_analyses):
+                st.markdown("**More analysis questions**")
+                recommended_ids = set(recommended_analyses.index)
+                for index, row in analysis_questions.iterrows():
+                    if index in recommended_ids:
+                        continue
+                    priority = row.get("Priority", "Medium")
+                    chart_match = chart_recommendations[chart_recommendations["Analysis Index"] == index]
+                    chart_name = chart_match.iloc[0]["Recommended Chart"] if not chart_match.empty else "Table"
+                    st.checkbox(
+                        row["Question"],
+                        value=False,
+                        key=f"explore_analysis_extra_{index}",
+                        help=f"{priority} priority · Recommended visual: {chart_name}",
+                    )
 
-        st.subheader("3. Excel Functions You Can Practice")
-        st.caption(
-            "These suggestions are tied to tasks supported by this dataset, rather than being a generic list of popular Excel functions."
-        )
-        if excel_function_recommendations.empty:
-            st.info("No specific Excel-function opportunities were inferred.")
-        else:
-            st.dataframe(excel_function_recommendations, use_container_width=True, hide_index=True)
+        with st.expander("Learn more about the methods"):
+            st.caption(
+                "These sections explain the tools DataGuide used or recommends for this dataset. "
+                "They are optional learning material, not extra work you must complete."
+            )
+            st.markdown("**Excel functions you can practice**")
+            if excel_function_recommendations.empty:
+                st.info("No specific Excel-function opportunities were inferred.")
+            else:
+                st.dataframe(excel_function_recommendations, use_container_width=True, hide_index=True)
 
-        st.divider()
-
-        st.subheader("4. Recommended Visuals")
-        st.caption("Each visual recommendation is attached to an analytical question so the chart has a reason to exist.")
-        if chart_recommendations.empty:
-            st.info("No chart recommendations were generated.")
-        else:
-            st.dataframe(chart_recommendations, use_container_width=True, hide_index=True)
+            st.markdown("**Why these visuals were recommended**")
+            if chart_recommendations.empty:
+                st.info("No chart recommendations were generated.")
+            else:
+                st.dataframe(chart_recommendations, use_container_width=True, hide_index=True)
 
         st.info(
-            "Use this tab as your analysis workspace. When you are ready to create the deliverable, go to **Generate**. "
-            "The Generate tab has its own independent KPI, analysis, filter, and dashboard-layout selections."
+            "DataGuide's main job here is to guide you: start with the recommended questions, "
+            "inspect the result, then use the visual choice to learn how the same finding can be communicated."
         )
 
     # ========================================================
@@ -1407,6 +1607,7 @@ try:
                                 dataset_name=uploaded_file.name,
                                 selected_filters=confirmed_filters,
                                 filter_recommendations=filter_recommendations,
+                                cleaning_audit=st.session_state.get("cleaning_audit", pd.DataFrame()),
                             )
                         with open(output_path, "rb") as workbook_file:
                             workbook_bytes = workbook_file.read()

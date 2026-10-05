@@ -90,3 +90,11 @@ def test_recommendations_with_empty_fields():
         "Priority",
         "Rationale",
     ]
+
+def test_outlier_analysis_is_recommended_when_iqr_flags_values():
+    from src.analysis.recommendations import generate_analysis_questions
+
+    df = pd.DataFrame({"Sales": [10, 11, 12, 13, 14, 15, 100], "Category": ["A"] * 7})
+    fields = {"measures": ["Sales"], "dimensions": ["Category"]}
+    result = generate_analysis_questions(df, fields)
+    assert "Distribution & Outliers" in result["Analysis Type"].tolist()

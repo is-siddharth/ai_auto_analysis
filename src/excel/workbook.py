@@ -123,12 +123,12 @@ def _write_dataframe(ws, df: pd.DataFrame, start_row: int = 4, start_col: int = 
     return start_row + len(df) + 1
 
 def _clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    cleaned = df.copy()
-    for column in cleaned.columns:
-        if pd.api.types.is_object_dtype(cleaned[column]) or pd.api.types.is_string_dtype(cleaned[column]):
-            cleaned[column] = cleaned[column].map(lambda value: value.strip() if isinstance(value, str) else value)
-            cleaned[column] = cleaned[column].replace(r"^\s*$", pd.NA, regex=True)
-    return cleaned
+    """Return the approved working dataset without silently modifying it.
+
+    Cleaning decisions are made upstream through the approval-based cleaning
+    workflow. The workbook layer must not perform additional hidden changes.
+    """
+    return df.copy()
 
 
 def _write_kpi_sheet(wb, used, kpi: dict[str, Any], position: int):
@@ -373,6 +373,7 @@ def generate_excel_workbook(
     dataset_name: str,
     selected_filters: list[str] | None = None,
     filter_recommendations: pd.DataFrame | None = None,
+    cleaning_audit: pd.DataFrame | None = None,
 ) -> str:
     """Generate the final analyst workbook and return its path."""
     selected_filters = selected_filters or []
@@ -404,13 +405,26 @@ def generate_excel_workbook(
     clean_title = _safe_sheet_title("02_Cleaned_Data", used)
     cleaned_for_output = _clean_dataframe(cleaned_df)
     ws = wb.create_sheet(clean_title)
-    _style_title(ws, "Cleaned Data", "Light standardization only: surrounding whitespace removed from text values and blank text normalized. No rows are silently deleted.", min(12, len(cleaned_for_output.columns)))
+    _style_title(ws, "Cleaned Data", "Approved working dataset. No additional cleaning is performed during workbook generation.", min(12, len(cleaned_for_output.columns)))
     _write_dataframe(ws, cleaned_for_output, start_row=4, table_name="CleanedData")
 
     dictionary_title = _safe_sheet_title("03_Data_Dictionary", used)
     ws = wb.create_sheet(dictionary_title)
     _style_title(ws, "Data Dictionary", "Detected analytical role and deterministic description for every field.", 8)
     _write_dataframe(ws, data_dictionary, start_row=4, table_name="DataDictionary")
+
+    cleaning_title = _safe_sheet_title("04_Cleaning_Log", used)
+    ws = wb.create_sheet(cleaning_title)
+    _style_title(
+        ws,
+        "Cleaning Log",
+        "Only approved cleaning actions are recorded here. An empty log means no cleaning actions were applied.",
+        8,
+    )
+    if cleaning_audit is None or cleaning_audit.empty:
+        ws["A4"] = "No cleaning actions were applied to the working dataset."
+    else:
+        _write_dataframe(ws, cleaning_audit, start_row=4, table_name="CleaningLog")
 
     kpi_sheet_names = []
     for position, kpi in enumerate(kpis, start=1):

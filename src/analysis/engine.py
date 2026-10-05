@@ -115,7 +115,10 @@ def _attribute_distribution(df, field):
 
     return {
         "table": result,
-        "chart_type": None,
+        "chart_type": "histogram",
+        "x": field,
+        "y": None,
+        "chart_data": pd.DataFrame({field: series}),
     }
 
 
@@ -150,12 +153,49 @@ def _rate_profile(df, field):
 
     return {
         "table": result,
-        "chart_type": None,
+        "chart_type": "histogram",
+        "x": field,
+        "y": None,
+        "chart_data": pd.DataFrame({field: series}),
     }
 
 
 def _score_profile(df, field):
     return _rate_profile(df, field)
+
+
+def _distribution_outliers(df, field):
+    _validate_numeric(df, field, "Field")
+    series = pd.to_numeric(df[field], errors="coerce").dropna()
+    if series.empty:
+        return _empty_result([field])
+
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+    flags = (series < lower) | (series > upper)
+
+    result = pd.DataFrame({
+        "Metric": [
+            "Records", "Median", "Q1", "Q3", "IQR",
+            "Lower Bound", "Upper Bound", "Potential Outliers",
+        ],
+        "Value": [
+            series.count(), series.median(), q1, q3, iqr,
+            lower, upper, int(flags.sum()),
+        ],
+    })
+    chart_data = pd.DataFrame({field: series})
+    chart_data["Potential Outlier"] = flags.to_numpy()
+    return {
+        "table": result,
+        "chart_type": "box",
+        "x": field,
+        "y": None,
+        "chart_data": chart_data,
+    }
 
 
 def _grouped_numeric(df, measure, dimension, aggregation="sum"):
@@ -455,6 +495,9 @@ def run_analysis(df, recommendation):
 
     if analysis_type == "Score Profile":
         return _score_profile(df, measure)
+
+    if analysis_type == "Distribution & Outliers":
+        return _distribution_outliers(df, measure)
 
     if analysis_type == "Dimension Comparison":
         return _dimension_comparison(df, measure, dimension)

@@ -23,10 +23,11 @@ from src.analysis.excel_functions import generate_excel_function_recommendations
 from src.analysis.filters import recommend_filters
 from src.analysis.kpis import calculate_kpi, generate_kpi_recommendations
 from src.analysis.recommendations import generate_analysis_questions
+from src.profiling.cleaning import apply_cleaning_actions, automated_cleaning_action_ids, recommend_cleaning_actions
 from src.dashboard.generator import recommend_dashboard_layouts
 from src.excel.workbook import generate_excel_workbook
 from src.ingestion.loader import load_raw_dataset
-from src.pipeline import analyze_dataset
+from src.pipeline import analyze_dataset, analyze_dataframe
 
 
 def main():
@@ -41,6 +42,8 @@ def main():
         "dashboard layout recommendations": recommend_dashboard_layouts,
         "workbook generation": generate_excel_workbook,
         "analysis engine": run_analysis,
+        "cleaning recommendations": recommend_cleaning_actions,
+        "cleaning application": apply_cleaning_actions,
     }
 
     print("AI Data Analytics Assistant - release verification")
@@ -53,7 +56,8 @@ def main():
     sample = Path(__file__).resolve().parents[1] / "data" / "raw" / "Superstore.csv"
     if sample.exists():
         print("\nRunning end-to-end workbook smoke test...")
-        result = analyze_dataset(str(sample))
+        deterministic_result = analyze_dataframe(load_raw_dataset(str(sample)), include_semantic=False)
+        result = deterministic_result
         df = result["data"]
         raw_df = load_raw_dataset(str(sample))
 
@@ -78,7 +82,11 @@ def main():
             if len(selected_analyses) == 3:
                 break
 
-        filter_recommendations = recommend_filters(df, result["analytical_fields"])
+        cleaning_recommendations = recommend_cleaning_actions(df)
+        auto_clean_ids = automated_cleaning_action_ids(cleaning_recommendations)
+        cleaned_df, cleaning_audit = apply_cleaning_actions(df, cleaning_recommendations, auto_clean_ids)
+
+        filter_recommendations = recommend_filters(cleaned_df, result["analytical_fields"])
         selected_filters = filter_recommendations["Field"].tolist()[:3] if not filter_recommendations.empty else []
 
         layouts = recommend_dashboard_layouts(
@@ -94,7 +102,7 @@ def main():
             generate_excel_workbook(
                 output_path=output,
                 raw_df=raw_df,
-                cleaned_df=df,
+                cleaned_df=cleaned_df,
                 data_dictionary=result["data_dictionary"],
                 kpis=selected_kpis,
                 analyses=selected_analyses,
@@ -103,6 +111,7 @@ def main():
                 dataset_name=sample.name,
                 selected_filters=selected_filters,
                 filter_recommendations=filter_recommendations,
+                cleaning_audit=cleaning_audit,
             )
             wb = load_workbook(output)
             if wb.sheetnames[-1] != "Dashboard_Template":
@@ -113,6 +122,8 @@ def main():
                 raise RuntimeError("No analysis worksheet was generated.")
             if "Filter_Guide" not in wb.sheetnames:
                 raise RuntimeError("Filter_Guide worksheet was not generated.")
+            if "04_Cleaning_Log" not in wb.sheetnames:
+                raise RuntimeError("Cleaning log worksheet was not generated.")
             print(f"[OK] end-to-end workbook smoke test ({len(wb.sheetnames)} sheets)")
         finally:
             output.unlink(missing_ok=True)

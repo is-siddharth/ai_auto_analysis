@@ -8,6 +8,7 @@ from src.interpretation.dictionary import (
 from src.analysis.recommendations import (
     generate_analysis_questions,
 )
+from src.pipeline import analyze_dataframe
 
 
 def test_pipeline_components_handle_ambiguous_dataset():
@@ -61,3 +62,15 @@ def test_pipeline_components_handle_ambiguous_dataset():
         recommendations,
         pd.DataFrame,
     )
+
+def test_pipeline_returns_cleaning_recommendations_without_modifying_data():
+    df = pd.DataFrame({
+        "Customer ID": ["C1", "C1", "C2"],
+        "Segment": ["Retail ", "Retail ", "Corporate"],
+        "Sales": [100.0, 100.0, 200.0],
+    })
+    result = analyze_dataframe(df, include_semantic=False)
+    assert "cleaning_recommendations" in result
+    assert not result["cleaning_recommendations"].empty
+    assert len(result["data"]) == 3
+    assert df.loc[0, "Segment"] == "Retail "

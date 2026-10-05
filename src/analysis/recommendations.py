@@ -47,6 +47,21 @@ def _valid_columns(values, columns):
     return [value for value in values if value in columns]
 
 
+
+def _has_iqr_outliers(df, field):
+    if field not in df.columns or not pd.api.types.is_numeric_dtype(df[field]):
+        return False
+    series = pd.to_numeric(df[field], errors="coerce").dropna()
+    if len(series) < 4:
+        return False
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    if iqr == 0:
+        return False
+    return bool(((series < q1 - 1.5 * iqr) | (series > q3 + 1.5 * iqr)).any())
+
+
 def _field_groups(analytical_fields, columns):
     fields = analytical_fields or {}
 
@@ -140,6 +155,25 @@ def generate_analysis_questions(df, analytical_fields):
             rationale=(
                 "Scores and ratings are better understood through their "
                 "distribution and central tendency."
+            ),
+        )
+
+    # Distribution and outlier learning. Only recommend this when the
+    # dataset actually contains IQR-flagged values, so the lesson is contextual.
+    outlier_candidates = []
+    for field in measures[:3] + attributes[:2] + rates[:2] + scores[:2]:
+        if field not in outlier_candidates and _has_iqr_outliers(df, field):
+            outlier_candidates.append(field)
+    for field in outlier_candidates[:2]:
+        _add_question(
+            recommendations,
+            f"What does the distribution of {field} look like, and where are the potential outliers?",
+            "Distribution & Outliers",
+            measure=field,
+            priority="High",
+            rationale=(
+                "Use the distribution and IQR rule together to learn how the field is spread "
+                "and which observations sit beyond the statistical outlier bounds."
             ),
         )
 
@@ -373,7 +407,7 @@ def generate_analysis_questions(df, analytical_fields):
 
     result = pd.DataFrame(recommendations, columns=OUTPUT_COLUMNS)
 
-    if len(result) > 15:
-        result = result.head(15).copy()
+    if len(result) > 20:
+        result = result.head(20).copy()
 
     return result.reset_index(drop=True)

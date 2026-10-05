@@ -86,6 +86,7 @@ def test_workbook_contains_expected_structure_and_final_dashboard(tmp_path):
     assert "Analysis_01" in wb.sheetnames
     assert "Dashboard_Instructions" in wb.sheetnames
     assert "Filter_Guide" in wb.sheetnames
+    assert "04_Cleaning_Log" in wb.sheetnames
     assert wb.sheetnames[-1] == "Dashboard_Template"
     assert len(wb["Analysis_01"]._charts) == 1
     assert "KPI 1" in wb["Dashboard_Template"]["B5"].value

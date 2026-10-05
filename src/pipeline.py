@@ -1,6 +1,7 @@
 from src.ingestion.loader import load_dataset
 from src.profiling.classifier import classify_columns
 from src.profiling.quality import profile_data_quality
+from src.profiling.cleaning import recommend_cleaning_actions
 from src.profiling.relationships import detect_date_relationships
 from src.interpretation.dictionary import (
     build_data_dictionary,
@@ -94,37 +95,11 @@ def _safe_semantic_analysis(
         }
 
 
-def analyze_dataset(file_path):
-    """
-    Main dataset analysis pipeline.
+def analyze_dataframe(df, include_semantic=True):
+    """Run the full deterministic pipeline and optionally semantic AI."""
 
-    Flow:
-
-        file
-          ↓
-        load
-          ↓
-        deterministic profiling
-          ↓
-        interpretation
-          ↓
-        semantic AI
-    """
-
-    # ---------------------------------------------------------------
-    # 1. Load
-    # ---------------------------------------------------------------
-
-    df = load_dataset(file_path)
-
-    if df is None:
-        raise ValueError(
-            "The dataset could not be loaded."
-        )
-
-    # ---------------------------------------------------------------
-    # 2. Classification
-    # ---------------------------------------------------------------
+    if df is None or not hasattr(df, "columns"):
+        raise ValueError("The dataset could not be analyzed.")
 
     classification = classify_columns(df)
 
@@ -133,6 +108,7 @@ def analyze_dataset(file_path):
     # ---------------------------------------------------------------
 
     quality = _safe_quality_profile(df)
+    cleaning_recommendations = recommend_cleaning_actions(df)
 
     # ---------------------------------------------------------------
     # 4. Relationships
@@ -196,18 +172,30 @@ def analyze_dataset(file_path):
     # 11. Semantic / AI interpretation
     # ---------------------------------------------------------------
 
-    semantic_analysis = _safe_semantic_analysis(
-        df=df,
-        classification=classification,
-        quality=quality,
-        relationships=relationships,
-        data_dictionary=data_dictionary,
-        analytical_fields=analytical_fields,
-        analysis_questions=analysis_questions,
-        kpi_recommendations=kpi_recommendations,
-        excel_function_recommendations=excel_function_recommendations,
-        chart_recommendations=chart_recommendations,
-    )
+    if include_semantic:
+        semantic_analysis = _safe_semantic_analysis(
+            df=df,
+            classification=classification,
+            quality=quality,
+            relationships=relationships,
+            data_dictionary=data_dictionary,
+            analytical_fields=analytical_fields,
+            analysis_questions=analysis_questions,
+            kpi_recommendations=kpi_recommendations,
+            excel_function_recommendations=excel_function_recommendations,
+            chart_recommendations=chart_recommendations,
+        )
+    else:
+        semantic_analysis = {
+            "context": None,
+            "interpretation": {
+                "enabled": False,
+                "success": False,
+                "message": "Semantic AI skipped for deterministic validation.",
+                "model": None,
+                "data": None,
+            },
+        }
 
     # ---------------------------------------------------------------
     # 12. Stable result contract
@@ -217,6 +205,7 @@ def analyze_dataset(file_path):
         "data": df,
         "classification": classification,
         "quality": quality,
+        "cleaning_recommendations": cleaning_recommendations,
         "relationships": relationships,
         "data_dictionary": data_dictionary,
         "analytical_fields": analytical_fields,
@@ -226,3 +215,10 @@ def analyze_dataset(file_path):
         "chart_recommendations": chart_recommendations,
         "semantic_analysis": semantic_analysis,
     }
+
+def analyze_dataset(file_path):
+    """Load a dataset and run the full deterministic + semantic pipeline."""
+    df = load_dataset(file_path)
+    if df is None:
+        raise ValueError("The dataset could not be loaded.")
+    return analyze_dataframe(df)
